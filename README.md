@@ -35,6 +35,22 @@ Small Flask service that accepts **GitHub webhooks** and runs **`git pull origin
 - Pushes to branches other than **main** are ignored (HTTP 200 with `status: "ignored"`).
 - The payload’s **`repository.name`** must match an existing directory under `PROJECT_ROOT`, or the service responds with 404 and does not run `git pull`.
 
+## Testing
+
+Install dev dependencies (includes `pytest`):
+
+```text
+pip install -r requirements-dev.txt
+```
+
+Run the suite from the project root:
+
+```text
+python -m pytest
+```
+
+`tests/conftest.py` sets `WEBHOOK_SECRET` and a temporary `PROJECT_ROOT` so your `.env` is not required. `subprocess.run` (git) is mocked for the success and failure cases.
+
 ## Production
 
 Run behind a reverse proxy (HTTPS, rate limiting) and as a **systemd** (or similar) service, not in the Flask dev server, if you expose this to the internet. Restrict who can reach the deploy URL.
