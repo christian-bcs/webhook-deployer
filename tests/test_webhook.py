@@ -101,8 +101,8 @@ class TestDeployFlow:
         )
         assert r.status_code == 404
         data = r.get_json()
-        assert "path" in data
-        assert "nonexistent" in data["path"]
+        assert data == {"error": "Repository folder not found on server"}
+        assert "path" not in data
 
     def test_200_ignored_branch(self, client, project_root):
         d = project_root / "ig-app"
@@ -164,4 +164,6 @@ class TestDeployFlow:
             headers={"X-Hub-Signature-256": sig},
         )
         assert r.status_code == 500
-        assert r.get_json()["step"] == "git_pull"
+        j = r.get_json()
+        assert j == {"status": "error", "step": "git_pull"}
+        assert "merge conflict" not in r.data.decode("utf-8").lower()

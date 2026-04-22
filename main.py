@@ -2,6 +2,7 @@ from flask import Flask, request, abort, jsonify
 import hmac
 import hashlib
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -95,12 +98,8 @@ def deploy():
         return jsonify({"error": "Invalid repository name"}), 400
 
     if not repo_path.is_dir():
-        return jsonify(
-            {
-                "error": "Repository folder not found on server",
-                "path": str(repo_path),
-            }
-        ), 404
+        log.warning("repository folder not found: %s", repo_path)
+        return jsonify({"error": "Repository folder not found on server"}), 404
 
     if data.get("ref") != MAIN_REF:
         return jsonify({"status": "ignored", "reason": "wrong branch"}), 200
@@ -115,16 +114,8 @@ def deploy():
         )
 
         if result.returncode != 0:
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "step": "git_pull",
-                        "stderr": result.stderr,
-                    }
-                ),
-                500,
-            )
+            log.error("git pull failed for %s: %s", repo_path, result.stderr)
+            return jsonify({"status": "error", "step": "git_pull"}), 500
 
         return (
             jsonify(
@@ -137,19 +128,12 @@ def deploy():
         )
 
     except subprocess.TimeoutExpired:
+        log.error("git pull timed out for %s", repo_path)
         return jsonify({"status": "error", "step": "timeout"}), 500
 
-    except Exception as e:
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "step": "exception",
-                    "message": str(e),
-                }
-            ),
-            500,
-        )
+    except Exception:
+        log.exception("deploy failed for %s", repo_path)
+        return jsonify({"status": "error", "step": "exception"}), 500
 
 
 if __name__ == "__main__":
