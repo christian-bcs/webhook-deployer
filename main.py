@@ -22,6 +22,16 @@ if not _project_root:
     raise RuntimeError("PROJECT_ROOT is not set. Add it to your environment or a .env file.")
 PROJECT_ROOT = Path(_project_root)
 
+_raw_allowed = os.environ.get("ALLOWED_REPOS", "")
+ALLOWED_REPOS: frozenset[str] = frozenset(
+    p.strip() for p in _raw_allowed.split(",") if p.strip()
+)
+if not ALLOWED_REPOS:
+    raise RuntimeError(
+        "ALLOWED_REPOS is not set or empty. Set a comma-separated list of "
+        "GitHub repository names (repository.name) that may deploy here."
+    )
+
 # only main branch triggers deploy
 MAIN_REF = "refs/heads/main"
 
@@ -72,7 +82,15 @@ def deploy():
         return jsonify({"error": "Missing repository in payload"}), 400
 
     name = repository.get("name")
-    repo_path = resolve_repo_path(name)
+    if not isinstance(name, str):
+        return jsonify({"error": "Invalid repository name"}), 400
+    n = name.strip()
+    if not n:
+        return jsonify({"error": "Invalid repository name"}), 400
+    if n not in ALLOWED_REPOS:
+        return jsonify({"error": "Repository not allowlisted"}), 403
+
+    repo_path = resolve_repo_path(n)
     if repo_path is None:
         return jsonify({"error": "Invalid repository name"}), 400
 

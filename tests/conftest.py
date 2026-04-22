@@ -7,6 +7,7 @@ from pathlib import Path
 # env must be set before main is imported (load_dotenv does not override these)
 os.environ["WEBHOOK_SECRET"] = "test-hmac-key"
 os.environ["PROJECT_ROOT"] = tempfile.mkdtemp()
+os.environ["ALLOWED_REPOS"] = "my-app,nonexistent,ig-app,ok-app,bad-app"
 
 import main as main
 

@@ -20,6 +20,20 @@ def _payload(
     return json.dumps(body).encode("utf-8")
 
 
+class TestAllowlist:
+    def test_403_not_allowlisted(self, client):
+        body = _payload(repo_name="not-in-allowlist")
+        sig = sign_payload("test-hmac-key", body)
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 403
+        assert r.get_json()["error"] == "Repository not allowlisted"
+
+
 class TestAuth:
     def test_403_missing_signature(self, client):
         r = client.post("/deploy", data=_payload())
