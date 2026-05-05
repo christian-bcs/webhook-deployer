@@ -11,7 +11,16 @@ os.environ["ALLOWED_REPOS"] = "my-app,nonexistent,ig-app,ok-app,bad-app"
 
 import main as main
 
+_test_audit_log_dir = Path(tempfile.mkdtemp())
+main.audit_log.handlers.clear()
+main.configure_audit_logging(_test_audit_log_dir)
+
 import pytest
+
+
+@pytest.fixture
+def audit_log_dir() -> Path:
+    return _test_audit_log_dir
 
 
 @pytest.fixture

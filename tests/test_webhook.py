@@ -292,3 +292,62 @@ class TestDeployFlow:
         j = r.get_json()
         assert j == {"status": "error", "step": "git_pull"}
         assert "merge conflict" not in r.data.decode("utf-8").lower()
+
+
+class TestAuditLog:
+    @staticmethod
+    def _new_audit_lines(log_path: Path) -> list[str]:
+        if not log_path.is_file():
+            return []
+        return log_path.read_text(encoding="utf-8").splitlines()
+
+    @patch("main.subprocess.run")
+    def test_git_pull_ok_writes_audit_line(self, mock_run, client, project_root, audit_log_dir):
+        log_path = audit_log_dir / "deployer.log"
+        before = len(self._new_audit_lines(log_path))
+
+        d = project_root / "ok-app"
+        d.mkdir(exist_ok=True)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="Already up to date.\n",
+            stderr="",
+        )
+        body = _payload(repo_name="ok-app")
+        sig = sign_payload("test-hmac-key", body)
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 200
+        lines = self._new_audit_lines(log_path)
+        delta = lines[before:]
+        assert delta
+        row = json.loads(delta[-1])
+        assert row["event"] == "git_pull_ok"
+        assert row["repo"] == "ok-app"
+        assert row["branch"] == "main"
+        assert "ts" in row
+
+    def test_invalid_signature_writes_audit_line(self, client, audit_log_dir):
+        log_path = audit_log_dir / "deployer.log"
+        before = len(self._new_audit_lines(log_path))
+
+        body = _payload()
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": "sha256=bad"},
+        )
+        assert r.status_code == 403
+        lines = self._new_audit_lines(log_path)
+        delta = lines[before:]
+        assert delta
+        row = json.loads(delta[-1])
+        assert row["event"] == "request_denied"
+        assert row["reason"] == "invalid_signature"
+
