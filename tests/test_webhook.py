@@ -10,13 +10,14 @@ from .helpers import sign_payload
 
 
 def _payload(
-    ref: str = "refs/heads/main",
+    *,
+    ref: str | None = "refs/heads/main",
     repo_name: str = "my-app",
+    omit_ref: bool = False,
 ) -> bytes:
-    body = {
-        "ref": ref,
-        "repository": {"name": repo_name},
-    }
+    body: dict[str, object] = {"repository": {"name": repo_name}}
+    if not omit_ref:
+        body["ref"] = ref
     return json.dumps(body).encode("utf-8")
 
 
@@ -89,7 +90,59 @@ class TestResolveRepo:
         assert p == (tmp_path / "valid-repo").resolve()
 
 
+class TestPullBranchFromRef:
+    def test_missing_defaults_main(self):
+        b, ign, err = main.pull_branch_from_ref(None)
+        assert (b, ign, err) == ("main", None, None)
+
+    def test_empty_string_defaults_main(self):
+        b, ign, err = main.pull_branch_from_ref("   ")
+        assert (b, ign, err) == ("main", None, None)
+
+    def test_refs_heads_full(self):
+        b, ign, err = main.pull_branch_from_ref("refs/heads/staging")
+        assert (b, ign, err) == ("staging", None, None)
+
+    def test_shorthand_branch(self):
+        b, ign, err = main.pull_branch_from_ref("main")
+        assert (b, ign, err) == ("main", None, None)
+
+    def test_non_heads_refs_ignored(self):
+        b, ign, err = main.pull_branch_from_ref("refs/tags/v1.0")
+        assert (b, ign, err) == (None, "tag ref", None)
+
+        b2, ign2, err2 = main.pull_branch_from_ref("refs/remotes/origin/main")
+        assert (b2, ign2, err2) == (None, "unsupported ref", None)
+
+    def test_invalid_ref_type(self):
+        b, ign, err = main.pull_branch_from_ref(123)
+        assert (b, ign, err) == (None, None, "Invalid ref")
+
+    @pytest.mark.parametrize(
+        "ref",
+        ["refs/heads/", "refs/heads/../x", "refs/heads/\\x", "..\\main", "\\foo"],
+    )
+    def test_invalid_branch_segment(self, ref):
+        b, ign, err = main.pull_branch_from_ref(ref)
+        assert err == "Invalid ref"
+        assert b is None and ign is None
+
+
 class TestDeployFlow:
+    def test_400_invalid_ref_over_http(self, client, project_root):
+        d = project_root / "my-app"
+        d.mkdir(exist_ok=True)
+        body = _payload(ref="refs/heads/../x")
+        sig = sign_payload("test-hmac-key", body)
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 400
+        assert r.get_json()["error"] == "Invalid ref"
+
     def test_404_no_such_directory(self, client, project_root):
         body = _payload(repo_name="nonexistent")
         sig = sign_payload("test-hmac-key", body)
@@ -104,9 +157,32 @@ class TestDeployFlow:
         assert data == {"error": "Repository folder not found on server"}
         assert "path" not in data
 
-    def test_200_ignored_branch(self, client, project_root):
+    def test_200_ignored_tag_ref(self, client, project_root):
         d = project_root / "ig-app"
-        d.mkdir()
+        d.mkdir(exist_ok=True)
+        body = _payload(ref="refs/tags/v1", repo_name="ig-app")
+        sig = sign_payload("test-hmac-key", body)
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 200
+        j = r.get_json()
+        assert j["status"] == "ignored"
+        assert j["reason"] == "tag ref"
+
+    @patch("main.subprocess.run")
+    def test_200_pull_branch_not_only_main(self, mock_run, client, project_root):
+        d = project_root / "ig-app"
+        d.mkdir(exist_ok=True)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="ok\n",
+            stderr="",
+        )
         body = _payload(ref="refs/heads/staging", repo_name="ig-app")
         sig = sign_payload("test-hmac-key", body)
         r = client.post(
@@ -116,12 +192,16 @@ class TestDeployFlow:
             headers={"X-Hub-Signature-256": sig},
         )
         assert r.status_code == 200
-        assert r.get_json()["status"] == "ignored"
+        j = r.get_json()
+        assert j["status"] == "success"
+        assert j["branch"] == "staging"
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0][-3:] == ["pull", "origin", "staging"]
 
     @patch("main.subprocess.run")
     def test_200_success(self, mock_run, client, project_root):
         d = project_root / "ok-app"
-        d.mkdir()
+        d.mkdir(exist_ok=True)
         mock_run.return_value = subprocess.CompletedProcess(
             args=["git"],
             returncode=0,
@@ -139,16 +219,61 @@ class TestDeployFlow:
         assert r.status_code == 200
         j = r.get_json()
         assert j["status"] == "success"
+        assert j["branch"] == "main"
         assert "Already up to date" in j["stdout"]
         mock_run.assert_called_once()
         call = mock_run.call_args[0][0]
         assert call[0] == "git" and call[1] == "-C"
         assert Path(call[2]).resolve() == d.resolve()
+        assert call[-3:] == ["pull", "origin", "main"]
+
+    @patch("main.subprocess.run")
+    def test_200_optional_ref_defaults_main(self, mock_run, client, project_root):
+        d = project_root / "ok-app"
+        d.mkdir(exist_ok=True)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="ok\n",
+            stderr="",
+        )
+        body = _payload(repo_name="ok-app", omit_ref=True)
+        sig = sign_payload("test-hmac-key", body)
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 200
+        assert r.get_json()["branch"] == "main"
+        assert mock_run.call_args[0][0][-1] == "main"
+
+    @patch("main.subprocess.run")
+    def test_200_shorthand_ref_main(self, mock_run, client, project_root):
+        d = project_root / "ok-app"
+        d.mkdir(exist_ok=True)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="ok\n",
+            stderr="",
+        )
+        body = _payload(ref="main", repo_name="ok-app")
+        sig = sign_payload("test-hmac-key", body)
+        r = client.post(
+            "/deploy",
+            data=body,
+            content_type="application/json",
+            headers={"X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 200
+        assert r.get_json()["branch"] == "main"
 
     @patch("main.subprocess.run")
     def test_500_git_fails(self, mock_run, client, project_root):
         d = project_root / "bad-app"
-        d.mkdir()
+        d.mkdir(exist_ok=True)
         mock_run.return_value = subprocess.CompletedProcess(
             args=["git"],
             returncode=1,

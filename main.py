@@ -35,8 +35,42 @@ if not ALLOWED_REPOS:
         "GitHub repository names (repository.name) that may deploy here."
     )
 
-# only main branch triggers deploy
-MAIN_REF = "refs/heads/main"
+DEFAULT_BRANCH = "main"
+
+
+def _branch_name_invalid(name: str) -> bool:
+    if not name or "\\" in name or ".." in name or "\x00" in name:
+        return True
+    if name.startswith("/"):
+        return True
+    return False
+
+
+def pull_branch_from_ref(ref: object) -> tuple[str | None, str | None, str | None]:
+    """Map webhook ref to branch for git pull.
+
+    Returns (branch, ignored_reason, bad_request_error). Exactly one outcome:
+    branch set; or ignored_reason for HTTP 200 ignored; or bad_request_error for 400.
+    """
+    if ref is None:
+        return (DEFAULT_BRANCH, None, None)
+    if not isinstance(ref, str):
+        return (None, None, "Invalid ref")
+    r = ref.strip()
+    if not r:
+        return (DEFAULT_BRANCH, None, None)
+    if r.startswith("refs/heads/"):
+        b = r[len("refs/heads/") :].strip()
+        if _branch_name_invalid(b):
+            return (None, None, "Invalid ref")
+        return (b, None, None)
+    if r.startswith("refs/tags/"):
+        return (None, "tag ref", None)
+    if r.startswith("refs/"):
+        return (None, "unsupported ref", None)
+    if _branch_name_invalid(r):
+        return (None, None, "Invalid ref")
+    return (r, None, None)
 
 
 def resolve_repo_path(name: str | None) -> Path | None:
@@ -101,13 +135,15 @@ def deploy():
         log.warning("repository folder not found: %s", repo_path)
         return jsonify({"error": "Repository folder not found on server"}), 404
 
-    if data.get("ref") != MAIN_REF:
-        return jsonify({"status": "ignored", "reason": "wrong branch"}), 200
+    branch, ignored_reason, ref_error = pull_branch_from_ref(data.get("ref"))
+    if ref_error:
+        return jsonify({"error": ref_error}), 400
+    if ignored_reason:
+        return jsonify({"status": "ignored", "reason": ignored_reason}), 200
 
     try:
-        # run git pull
         result = subprocess.run(
-            ["git", "-C", str(repo_path), "pull", "origin", "main"],
+            ["git", "-C", str(repo_path), "pull", "origin", branch],
             capture_output=True,
             text=True,
             timeout=60,
@@ -121,6 +157,7 @@ def deploy():
             jsonify(
                 {
                     "status": "success",
+                    "branch": branch,
                     "stdout": result.stdout,
                 }
             ),
