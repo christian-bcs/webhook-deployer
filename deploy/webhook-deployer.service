@@ -1,0 +1,23 @@
+[Unit]
+Description=Webhook Deployer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# replace User/Group with the account that owns the clone and can git pull under PROJECT_ROOT
+User=REPLACE_USER
+Group=REPLACE_USER
+# set these to the directory where this repo is cloned on the server
+WorkingDirectory=/path/to/webhook-deployer
+EnvironmentFile=/path/to/webhook-deployer/.env
+ExecStart=/path/to/webhook-deployer/venv/bin/python /path/to/webhook-deployer/main.py
+Restart=always
+RestartSec=5
+
+# harden a bit; drop if git needs broader access
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

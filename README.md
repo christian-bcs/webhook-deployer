@@ -56,3 +56,16 @@ python -m pytest
 ## Production
 
 Run behind a reverse proxy (HTTPS, rate limiting) and as a **systemd** (or similar) service, not in the Flask dev server, if you expose this to the internet. Restrict who can reach the deploy URL.
+
+### systemd
+
+A sample unit is in [`deploy/webhook-deployer.service`](deploy/webhook-deployer.service). Set `User`/`Group` and replace `/path/to/webhook-deployer` with the absolute path where you cloned **this** repo (venv and `.env` live there). `PROJECT_ROOT` in `.env` is separate — that is the parent of the repos that get `git pull`. Then:
+
+```text
+sudo cp deploy/webhook-deployer.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now webhook-deployer
+sudo systemctl status webhook-deployer
+```
+
+The service user must be able to `git pull` in each directory under `PROJECT_ROOT`.
